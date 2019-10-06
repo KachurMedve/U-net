@@ -182,7 +182,7 @@ train_y = train_y.reshape(*enter_shape)
 input_layer = Input(enter_shape[1:])
 output_layer = build_model(input_layer, start_neurons)
 model = Model(input_layer, output_layer)
-model.compile(loss=bce_jaccard_loss, optimizer=Adam(lr=1e-3), metrics=dice_coef)
+model.compile(loss=bce_jaccard_loss, optimizer=Adam(lr=1e-3), metrics=[dice_coef])
 model.save_weights('./keras.weights')
 
 history = model.fit(train_x, train_y,
