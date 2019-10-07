@@ -13,7 +13,6 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils as utils
 import torch.utils.data as data
 
 from torchvision import datasets, transforms
@@ -24,27 +23,33 @@ batch_size = 1
 lr = 0.001
 
 
-def Down(k1, k2, do=0.5):
-    return nn.Sequential(
-        nn.Conv3d(k1, k2, 3),
-        nn.ReLU(True),
-        nn.Conv3d(k2, k2, 3),
-        nn.ReLU(True),
-        nn.MaxPool3d(2),
-        nn.Dropout3d(do),
-    )
+class Down(nn.Module):
+    def __init__(self, k1, k2, do=0.5):
+        super(Down, self).__init__()
+
+        self.down_block = nn.Sequential(
+            nn.MaxPool3d(2),
+            nn.Dropout3d(do),
+            nn.Conv3d(k1, k2, 3, padding=1),
+            nn.ReLU(True),
+            nn.Conv3d(k2, k2, 3, padding=1),
+            nn.ReLU(True),
+        )
+
+    def forward(self, x):
+        return self.down_block(x)
 
 
 class Up(nn.Module):
     def __init__(self, k1, k2):
         super(Up, self).__init__()
 
-        self.deconv = nn.ConvTranspose3d(k1, k2, 3, 2)
+        self.deconv = nn.ConvTranspose3d(k1, k2, 3, stride=2)
         self.double_conv = nn.Sequential(
             nn.Dropout3d(0.5),
-            nn.Conv3d(k1, k2, 3),
+            nn.Conv3d(k1, k2, 3, padding=1),
             nn.ReLU(True),
-            nn.Conv3d(k2, k2, 3),
+            nn.Conv3d(k2, k2, 3, padding=1),
             nn.ReLU(True),
         )
 
@@ -77,18 +82,21 @@ class Up(nn.Module):
         return x
 
 
+# The depth is 4. The first block contains 2 convolutions. Its result is used to concatenate then (grey arrow).
+# The following 4 blocks are used to descend, and the results of the first three among them are used to concatenate
+# (gray arrows) during the ascent. The fourth of them is used for ascending (green arrow, etc.)
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-
-        self.down1 = Down(1, start_neurons * 1, do=0.25)
-        self.down2 = Down(start_neurons * 1, start_neurons * 2)
-        self.down3 = Down(start_neurons * 2, start_neurons * 4)
-        self.down4 = Down(start_neurons * 4, start_neurons * 8)
-        self.middle = nn.Sequential(
-            nn.Conv3d(start_neurons * 8, start_neurons * 16, 3),
-            nn.Conv3d(start_neurons * 16, start_neurons * 16, 3),
+        self.start = nn.Sequential(
+            nn.Conv3d(1, start_neurons * 1, 3),
+            nn.Conv3d(start_neurons * 1, start_neurons * 1, 3),
         )
+        self.down1 = Down(start_neurons * 1, start_neurons * 2, do=0.25)
+        self.down2 = Down(start_neurons * 2, start_neurons * 4)
+        self.down3 = Down(start_neurons * 4, start_neurons * 8)
+        self.down4 = Down(start_neurons * 8, start_neurons * 16)
+
         self.up4 = Up(start_neurons * 16, start_neurons * 8)
         self.up3 = Up(start_neurons * 8, start_neurons * 4)
         self.up2 = Up(start_neurons * 4, start_neurons * 2)
@@ -98,12 +106,13 @@ class Net(nn.Module):
             nn.Conv3d(start_neurons * 1, 1, 1)
         )
 
+    #
     def forward(self, x):
-        x1 = self.down1(x)
-        x2 = self.down2(x1)
-        x3 = self.down3(x2)
-        x4 = self.down4(x3)
-        x = self.middle(x4)
+        x1 = self.start(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x = self.down4(x4)
         x = self.up4(x, x4)
         x = self.up3(x, x3)
         x = self.up2(x, x2)
