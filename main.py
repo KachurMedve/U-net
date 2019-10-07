@@ -24,7 +24,7 @@ batch_size = 1
 lr = 0.001
 
 
-def Direct(k1, k2, do=0.5):
+def Down(k1, k2, do=0.5):
     return nn.Sequential(
         nn.Conv3d(k1, k2, 3),
         nn.ReLU(True),
@@ -36,9 +36,9 @@ def Direct(k1, k2, do=0.5):
     )
 
 
-class Retour(nn.Module):
+class Up(nn.Module):
     def __init__(self, k1, k2):
-        super(Retour, self).__init__()
+        super(Up, self).__init__()
 
         self.deconv = nn.ConvTranspose3d(k1, k2, 3, 2)
         self.double_conv = nn.Sequential(
@@ -49,63 +49,66 @@ class Retour(nn.Module):
             nn.ReLU(True),
         )
 
-    def couper_centre(self, couche, taille_cible, diff):
+    @staticmethod
+    def crop_centre(layer, target_size, diff):
         diff //= 2
-        return couche[:, :, diff[0]: diff[0] + taille_cible[0], diff[1]: diff[1] + taille_cible[1],
-               diff[2]: diff[2] + taille_cible[2]]
+        return layer[:, :, diff[0]: diff[0] + target_size[0], diff[1]: diff[1] + target_size[1],
+               diff[2]: diff[2] + target_size[2]]
 
-    def rembourrer(self, couche, diff):
-        return F.pad(couche, [diff[-1], diff[-1] - diff[-1] // 2, diff[-2] // 2, diff[-2] - diff[-2] // 2,
-                              diff[-3] // 2, diff[-3] - diff[-3] // 2])
+    @staticmethod
+    def add_padding(layer, diff):
+        return F.pad(layer, [diff[-1], diff[-1] - diff[-1] // 2, diff[-2] // 2, diff[-2] - diff[-2] // 2,
+                             diff[-3] // 2, diff[-3] - diff[-3] // 2])
 
     # [N, C, Z, Y, X]; N - number of batches, C - number of channels
-    def forward(self, x1, x2, concat='couper'):
+    # Two options for concatenation - crop x2 or add padding to x1
+    def forward(self, x1, x2, concat='crop'):
         x1 = self.deconv(x1)
-        taille_couche = x1.size()[-3]
-        taille_cible = x2.size()[-3]
-        diff = (taille_couche - taille_cible)
+        layer_size = x1.size()[-3]
+        target_size = x2.size()[-3]
+        diff = (layer_size - target_size)
 
-        if concat == 'couper':
-            x2 = self.couper_centre(x2, taille_cible, diff)
+        if concat == 'crop':
+            x2 = self.crop_centre(x2, target_size, diff)
         else:
-            x1 = self.rembourrer(x1, diff)
+            x1 = self.add_padding(x1, diff)
 
         x = torch.cat([x2, x1], dim=2)
         x = self.double_conv(x)
         return x
 
 
-class Reseau(nn.Module):
+class Net(nn.Module):
     def __init__(self):
-        super(Reseau, self).__init__()
+        super(Net, self).__init__()
 
-        self.direct_bloque1 = Direct(1, start_neurons * 1, do=0.25)
-        self.direct_bloque2 = Direct(start_neurons * 1, start_neurons * 2)
-        self.direct_bloque3 = Direct(start_neurons * 2, start_neurons * 4)
-        self.direct_bloque4 = Direct(start_neurons * 4, start_neurons * 8)
-        self.milieu = nn.Sequential(
+        self.down1 = Down(1, start_neurons * 1, do=0.25)
+        self.down2 = Down(start_neurons * 1, start_neurons * 2)
+        self.down3 = Down(start_neurons * 2, start_neurons * 4)
+        self.down4 = Down(start_neurons * 4, start_neurons * 8)
+        self.middle = nn.Sequential(
             nn.Conv3d(start_neurons * 8, start_neurons * 16, 3),
             nn.Conv3d(start_neurons * 16, start_neurons * 16, 3),
         )
-        self.retour_bloque4 = Retour(start_neurons * 16, start_neurons * 8)
-        self.retour_bloque3 = Retour(start_neurons * 8, start_neurons * 4)
-        self.retour_bloque2 = Retour(start_neurons * 4, start_neurons * 2)
-        self.retour_bloque1 = Retour(start_neurons * 2, start_neurons * 1)
+        self.up4 = Up(start_neurons * 16, start_neurons * 8)
+        self.up3 = Up(start_neurons * 8, start_neurons * 4)
+        self.up2 = Up(start_neurons * 4, start_neurons * 2)
+        self.up1 = Up(start_neurons * 2, start_neurons * 1)
         self.final = nn.Sequential(
             nn.Dropout3d(0.5),
             nn.Conv3d(start_neurons * 1, 1, 1)
         )
 
     def forward(self, x):
-        x1 = self.direct_bloque1(x)
-        x2 = self.direct_bloque2(x1)
-        x3 = self.direct_bloque3(x2)
-        x4 = self.direct_bloque4(x3)
-        x = self.milieu(x4)
-        x = self.retour_bloque4(x, x4)
-        x = self.retour_bloque3(x, x3)
-        x = self.retour_bloque2(x, x2)
-        x = self.retour_bloque1(x, x1)
+        x1 = self.down1(x)
+        x2 = self.down2(x1)
+        x3 = self.down3(x2)
+        x4 = self.down4(x3)
+        x = self.middle(x4)
+        x = self.up4(x, x4)
+        x = self.up3(x, x3)
+        x = self.up2(x, x2)
+        x = self.up1(x, x1)
 
         return self.final(x)
 
@@ -229,10 +232,10 @@ test_loader = data.DataLoader(
     batch_size=batch_size,
     shuffle=True)
 
-reseau = Reseau()
-optimiseur = optim.SGD(reseau.parameters(), lr=lr)
+net = Net()
+optimizer = optim.SGD(net.parameters(), lr=lr)
 criterion = nn.CrossEntropyLoss()
-print(reseau)
+print(net)
 
 total_step = len(train_loader)
 loss_list = []
@@ -240,14 +243,14 @@ acc_list = []
 for epoch in range(num_epochs):
     for i, (images, labels) in enumerate(train_loader):
         # Passage through the network
-        outputs = reseau(images)
+        outputs = net(images)
         loss = criterion(outputs, labels)
         loss_list.append(loss.item())
 
         # Backpropagation and optimization
-        optimiseur.zero_grad()
+        optimizer.zero_grad()
         loss.backward()
-        optimiseur.step()
+        optimizer.step()
 
         # Calculation of precision
         total = labels.size(0)
