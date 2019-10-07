@@ -32,7 +32,6 @@ def Down(k1, k2, do=0.5):
         nn.ReLU(True),
         nn.MaxPool3d(2),
         nn.Dropout3d(do),
-        nn.Conv3d(k1, k2, 3)
     )
 
 
