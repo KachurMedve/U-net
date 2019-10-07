@@ -58,7 +58,7 @@ class Retour(nn.Module):
         return F.pad(couche, [diff[-1], diff[-1] - diff[-1] // 2, diff[-2] // 2, diff[-2] - diff[-2] // 2,
                               diff[-3] // 2, diff[-3] - diff[-3] // 2])
 
-    # [N, C, Z, Y, X]; N - nombre de lots, C - nombre de canaux
+    # [N, C, Z, Y, X]; N - number of batches, C - number of channels
     def forward(self, x1, x2, concat='couper'):
         x1 = self.deconv(x1)
         taille_couche = x1.size()[-3]
@@ -167,7 +167,7 @@ def load_itk(filename):
     return ct_scan, origin, spacing
 
 
-# telechargement de l'image (DICOM -> numpy)
+# load image (DICOM -> numpy)
 PathDicom = "./DICOM/1/"
 DCM_files = []
 for dirName, subdirList, fileList in os.walk(PathDicom):
@@ -184,10 +184,10 @@ for dirName, subdirList, fileList in os.walk(PathLabels):
 
 train_x = extract_voxel_data(DCM_files)
 
-# chaque element de train_y represente 1 cube de 256*256*136 + metadonnees
+# each element of train_y represents 1 cube of 256 * 256 * 136 + metadata
 train_y = [load_itk(label)[0] for label in label_files]
 
-# Complementer les y par les zeros
+# Complement y with zeros
 # train_y = np.array(
 #     [np.concatenate((i, np.zeros((i.shape[0], i.shape[1], train_x.shape[2] - i.shape[2]))), axis=2) for i in train_y])
 train_y = np.array(train_y)
@@ -196,8 +196,8 @@ train_x = np.array([train_x])
 train_x = train_x[:, :, :, 58:186]
 train_y = train_y[:, :, :, 4:132]
 
-# Cree une cinquieme dimension fictive pour le nombre de canaux (contrainte de keras et pytorch)
-# Pour pytorch la taille demandee est de [N, C, Z, Y, X], pour keras - [N, X, Y, Z, C]
+# Creates a fifth fictitious dimension for the number of channels (constraint of keras and pytorch)
+# For pytorch the requested size is [N, C, Z, Y, X], for keras - [N, X, Y, Z, C]
 # keras
 # enter_shape = train_x.shape + (1,)
 # train_x = train_x.reshape(*enter_shape)
@@ -239,17 +239,17 @@ loss_list = []
 acc_list = []
 for epoch in range(num_epochs):
     for i, (images, labels) in enumerate(train_loader):
-        # Passage a travers le reseau
+        # Passage through the network
         outputs = reseau(images)
         loss = criterion(outputs, labels)
         loss_list.append(loss.item())
 
-        # Retropropagation et optimisation
+        # Backpropagation and optimization
         optimiseur.zero_grad()
         loss.backward()
         optimiseur.step()
 
-        # Calcul de la precision
+        # Calculation of precision
         total = labels.size(0)
         _, predicted = torch.max(outputs.data, 1)
         correct = (predicted == labels).sum().item()
