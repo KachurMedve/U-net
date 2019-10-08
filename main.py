@@ -18,9 +18,9 @@ import torch.utils.data as data
 from torchvision import datasets, transforms
 
 start_neurons = 16
-num_epochs = 1
-batch_size = 1
-lr = 0.001
+num_epochs = 10
+batch_size = 2
+lr = 0.0005
 
 
 class Down(nn.Module):
@@ -44,7 +44,7 @@ class Up(nn.Module):
     def __init__(self, k1, k2):
         super(Up, self).__init__()
 
-        self.deconv = nn.ConvTranspose3d(k1, k2, 3, stride=2)
+        self.deconv = nn.ConvTranspose3d(k1, k2, 2, stride=2)
         self.double_conv = nn.Sequential(
             nn.Dropout3d(0.5),
             nn.Conv3d(k1, k2, 3, padding=1),
@@ -68,8 +68,8 @@ class Up(nn.Module):
     # Two options for concatenation - crop x2 or add padding to x1
     def forward(self, x1, x2, concat='crop'):
         x1 = self.deconv(x1)
-        layer_size = x1.size()[-3]
-        target_size = x2.size()[-3]
+        layer_size = np.array(x1.size()[-3:])
+        target_size = np.array(x2.size()[-3:])
         diff = (layer_size - target_size)
 
         if concat == 'crop':
@@ -77,7 +77,7 @@ class Up(nn.Module):
         else:
             x1 = self.add_padding(x1, diff)
 
-        x = torch.cat([x2, x1], dim=2)
+        x = torch.cat([x2, x1], dim=1)
         x = self.double_conv(x)
         return x
 
@@ -89,8 +89,8 @@ class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
         self.start = nn.Sequential(
-            nn.Conv3d(1, start_neurons * 1, 3),
-            nn.Conv3d(start_neurons * 1, start_neurons * 1, 3),
+            nn.Conv3d(1, start_neurons * 1, 3, padding=1),
+            nn.Conv3d(start_neurons * 1, start_neurons * 1, 3, padding=1),
         )
         self.down1 = Down(start_neurons * 1, start_neurons * 2, do=0.25)
         self.down2 = Down(start_neurons * 2, start_neurons * 4)
@@ -102,8 +102,9 @@ class Net(nn.Module):
         self.up2 = Up(start_neurons * 4, start_neurons * 2)
         self.up1 = Up(start_neurons * 2, start_neurons * 1)
         self.final = nn.Sequential(
-            nn.Dropout3d(0.5),
-            nn.Conv3d(start_neurons * 1, 1, 1)
+            nn.Dropout3d(0.25),
+            nn.Conv3d(start_neurons * 1, 1, 1),
+            nn.Sigmoid()
         )
 
     #
@@ -204,19 +205,24 @@ train_y = [load_itk(label)[0] for label in label_files]
 train_y = np.array(train_y)
 train_x = np.array([train_x])
 
-train_x = train_x[:, :, :, 58:186]
-train_y = train_y[:, :, :, 4:132]
+# train_x = train_x[:, :, :, 58:186]
+# train_y = train_y[:, :, :, 4:132]
+train_x = train_x[:, 128:192, 128:192, 70:134]
+train_x = np.concatenate((train_x, train_x), axis=0)
+train_y = train_y[:, 128:192, 128:192, 70:134]
+train_y = np.concatenate((train_y, train_y), axis=0)
 
-# Creates a fifth fictitious dimension for the number of channels (constraint of keras and pytorch)
+# Creates a fifth fictional dimension for the number of channels (constraint of keras and pytorch)
 # For pytorch the requested size is [N, C, Z, Y, X], for keras - [N, X, Y, Z, C]
-# keras
-# enter_shape = train_x.shape + (1,)
-# train_x = train_x.reshape(*enter_shape)
-# train_y = train_y.reshape(*enter_shape)
+
 # pytorch
-enter_shape = (train_x.shape[0], 1) + train_x.shape[-3:][::-1]
-train_x = train_x.reshape(*enter_shape)
-train_y = train_y.reshape(*enter_shape)
+# The size of 'y' is expected to be [N, Z, Y, X] (for nn.CrossEntropyLoss), so there is no need
+# to add a fictional dimension, but you have to resize 'y' anyway to change the order of X, Y and Z.
+# And in F.binary_cross_entropy not to add the dimension is called 'deprecated' (can you finally decide, damn?!)
+enter_shape_x = (train_x.shape[0], 1) + train_x.shape[-3:][::-1]
+enter_shape_y = (train_x.shape[0],) + train_x.shape[-3:][::-1]
+train_x = train_x.reshape(*enter_shape_x)
+train_y = train_y.reshape(*enter_shape_y)
 
 # Visualisation
 # train_y = np.array(train_y[0])
@@ -226,7 +232,10 @@ train_y = train_y.reshape(*enter_shape)
 # input()
 #
 tensor_x = torch.stack([torch.Tensor(i) for i in train_x])
-tensor_y = torch.stack([torch.Tensor(i) for i in train_y])
+# God knows why this damn thing asks LongTensor for y in criterion, but that's the way it must be done
+# It seems to be a limitation of the entropy formula. A bit more on the question here (use VPN):
+# https://discuss.pytorch.org/t/runtimeerror-expected-object-of-scalar-type-long-but-got-scalar-type-float-when-using-crossentropyloss/30542/4
+tensor_y = torch.stack([torch.FloatTensor(i) for i in train_y])
 
 train_dataset = data.TensorDataset(tensor_x, tensor_y)
 train_loader = data.DataLoader(
@@ -242,9 +251,9 @@ test_loader = data.DataLoader(
 
 net = Net()
 optimizer = optim.SGD(net.parameters(), lr=lr)
-criterion = nn.CrossEntropyLoss()
+# We could use nn.CrossEntropyLoss() if all our y were in {0; 1}
+criterion = F.binary_cross_entropy
 print(net)
-
 total_step = len(train_loader)
 loss_list = []
 acc_list = []
@@ -252,6 +261,7 @@ for epoch in range(num_epochs):
     for i, (images, labels) in enumerate(train_loader):
         # Passage through the network
         outputs = net(images)
+        print(torch.min(labels))
         loss = criterion(outputs, labels)
         loss_list.append(loss.item())
 
@@ -261,12 +271,13 @@ for epoch in range(num_epochs):
         optimizer.step()
 
         # Calculation of precision
-        total = labels.size(0)
-        _, predicted = torch.max(outputs.data, 1)
-        correct = (predicted == labels).sum().item()
-        acc_list.append(correct / total)
+        # It's good to use when it comes to classification and we have a few layers at the output each of which
+        # represents the probability of a class for the corresponding pixel
+        # total = labels.size(0)
+        # _, predicted = torch.max(outputs.data, 1)
+        # correct = (predicted == labels).sum().item()
+        # acc_list.append(correct / total)
 
-        if (i + 1) % 100 == 0:
-            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Accuracy: {:.2f}%'
-                  .format(epoch + 1, num_epochs, i + 1, total_step, loss.item(),
-                          (correct / total) * 100))
+        if (i + 1) % 1 == 0:
+            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'
+                  .format(epoch + 1, num_epochs, i + 1, total_step, loss.item()))
