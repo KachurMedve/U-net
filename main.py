@@ -220,7 +220,7 @@ train_y = np.concatenate((train_y, train_y), axis=0)
 # to add a fictional dimension, but you have to resize 'y' anyway to change the order of X, Y and Z.
 # And in F.binary_cross_entropy not to add the dimension is called 'deprecated' (can you finally decide, damn?!)
 enter_shape_x = (train_x.shape[0], 1) + train_x.shape[-3:][::-1]
-enter_shape_y = (train_x.shape[0],) + train_x.shape[-3:][::-1]
+enter_shape_y = (train_x.shape[0], 1) + train_x.shape[-3:][::-1]
 train_x = train_x.reshape(*enter_shape_x)
 train_y = train_y.reshape(*enter_shape_y)
 
@@ -250,7 +250,7 @@ test_loader = data.DataLoader(
     shuffle=True)
 
 net = Net()
-optimizer = optim.SGD(net.parameters(), lr=lr)
+optimizer = optim.Adam(net.parameters(), lr=lr)
 # We could use nn.CrossEntropyLoss() if all our y were in {0; 1}
 criterion = F.binary_cross_entropy
 print(net)
@@ -261,7 +261,6 @@ for epoch in range(num_epochs):
     for i, (images, labels) in enumerate(train_loader):
         # Passage through the network
         outputs = net(images)
-        print(torch.min(labels))
         loss = criterion(outputs, labels)
         loss_list.append(loss.item())
 
