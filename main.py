@@ -19,12 +19,13 @@ from torchvision import datasets, transforms
 
 start_neurons = 16
 num_epochs = 10
-batch_size = 2
-lr = 0.0005
+batch_size = 1
+lr = 0.00005
+do = 0.0
 
 
 class Down(nn.Module):
-    def __init__(self, k1, k2, do=0.5):
+    def __init__(self, k1, k2):
         super(Down, self).__init__()
 
         self.down_block = nn.Sequential(
@@ -46,7 +47,7 @@ class Up(nn.Module):
 
         self.deconv = nn.ConvTranspose3d(k1, k2, 2, stride=2)
         self.double_conv = nn.Sequential(
-            nn.Dropout3d(0.5),
+            nn.Dropout3d(do),
             nn.Conv3d(k1, k2, 3, padding=1),
             nn.ReLU(True),
             nn.Conv3d(k2, k2, 3, padding=1),
@@ -68,12 +69,12 @@ class Up(nn.Module):
     # Two options for concatenation - crop x2 or add padding to x1
     def forward(self, x1, x2, concat='crop'):
         x1 = self.deconv(x1)
-        layer_size = np.array(x1.size()[-3:])
-        target_size = np.array(x2.size()[-3:])
-        diff = (layer_size - target_size)
+        x1_size = np.array(x1.size()[-3:])
+        x2_size = np.array(x2.size()[-3:])
+        diff = (x2_size - x1_size)
 
         if concat == 'crop':
-            x2 = self.crop_centre(x2, target_size, diff)
+            x2 = self.crop_centre(x2, x1_size, diff)
         else:
             x1 = self.add_padding(x1, diff)
 
@@ -92,7 +93,7 @@ class Net(nn.Module):
             nn.Conv3d(1, start_neurons * 1, 3, padding=1),
             nn.Conv3d(start_neurons * 1, start_neurons * 1, 3, padding=1),
         )
-        self.down1 = Down(start_neurons * 1, start_neurons * 2, do=0.25)
+        self.down1 = Down(start_neurons * 1, start_neurons * 2)
         self.down2 = Down(start_neurons * 2, start_neurons * 4)
         self.down3 = Down(start_neurons * 4, start_neurons * 8)
         self.down4 = Down(start_neurons * 8, start_neurons * 16)
@@ -102,7 +103,7 @@ class Net(nn.Module):
         self.up2 = Up(start_neurons * 4, start_neurons * 2)
         self.up1 = Up(start_neurons * 2, start_neurons * 1)
         self.final = nn.Sequential(
-            nn.Dropout3d(0.25),
+            nn.Dropout3d(do),
             nn.Conv3d(start_neurons * 1, 1, 1),
             nn.Sigmoid()
         )
@@ -166,13 +167,10 @@ def extract_voxel_data(DCM_files):
 def load_itk(filename):
     # Reads the image using SimpleITK
     itkimage = sitk.ReadImage(filename)
-
     # Convert the image to a  numpy array first and then shuffle the dimensions to get axis in the order z,y,x
     ct_scan = sitk.GetArrayFromImage(itkimage)
-
     # Read the origin of the ct_scan, will be used to convert the coordinates from world to voxel and vice versa.
     origin = np.array(list(reversed(itkimage.GetOrigin())))
-
     # Read the spacing along each dimension
     spacing = np.array(list(reversed(itkimage.GetSpacing())))
 
@@ -194,7 +192,7 @@ for dirName, subdirList, fileList in os.walk(PathLabels):
         if ".mhd" in filename.lower():
             label_files.append(os.path.join(dirName, filename))
 
-train_x = extract_voxel_data(DCM_files)
+train_x = [extract_voxel_data(DCM_files)]
 
 # each element of train_y represents 1 cube of 256 * 256 * 136 + metadata
 train_y = [load_itk(label)[0] for label in label_files]
@@ -203,14 +201,31 @@ train_y = [load_itk(label)[0] for label in label_files]
 # train_y = np.array(
 #     [np.concatenate((i, np.zeros((i.shape[0], i.shape[1], train_x.shape[2] - i.shape[2]))), axis=2) for i in train_y])
 train_y = np.array(train_y)
-train_x = np.array([train_x])
+train_x = np.array(train_x)
+
+# # Demonstration of the pixels of each label
+# point_dict = {}
+# for z_i, z in enumerate(train_y[0]):
+#     for y_i, y in enumerate(z):
+#         for x_i, x in enumerate(y):
+#             if x != 0:
+#                 if x not in point_dict:
+#                     point_dict[x] = [[x_i, y_i, z_i]]
+#                 else:
+#                     point_dict[x] += [[x_i, y_i, z_i]]
+#
+# for value, point in point_dict.items():
+#     print(value, point)
+
 
 # train_x = train_x[:, :, :, 58:186]
 # train_y = train_y[:, :, :, 4:132]
 train_x = train_x[:, 128:192, 128:192, 70:134]
-train_x = np.concatenate((train_x, train_x), axis=0)
+# train_x = np.concatenate((train_x, train_x), axis=0)
 train_y = train_y[:, 128:192, 128:192, 70:134]
-train_y = np.concatenate((train_y, train_y), axis=0)
+# train_y = np.concatenate((train_y, train_y), axis=0)
+
+train_y = np.array(list(map(lambda x: 0 if x == 0 else 1, train_y.flatten())))
 
 # Creates a fifth fictional dimension for the number of channels (constraint of keras and pytorch)
 # For pytorch the requested size is [N, C, Z, Y, X], for keras - [N, X, Y, Z, C]
@@ -231,11 +246,11 @@ train_y = train_y.reshape(*enter_shape_y)
 # mlab.savefig('surface.obj')
 # input()
 #
-tensor_x = torch.stack([torch.Tensor(i) for i in train_x])
+tensor_x = torch.stack([torch.tensor(i, dtype=torch.float32) for i in train_x])
 # God knows why this damn thing asks LongTensor for y in criterion, but that's the way it must be done
 # It seems to be a limitation of the entropy formula. A bit more on the question here (use VPN):
 # https://discuss.pytorch.org/t/runtimeerror-expected-object-of-scalar-type-long-but-got-scalar-type-float-when-using-crossentropyloss/30542/4
-tensor_y = torch.stack([torch.FloatTensor(i) for i in train_y])
+tensor_y = torch.stack([torch.tensor(i, dtype=torch.float32) for i in train_y])
 
 train_dataset = data.TensorDataset(tensor_x, tensor_y)
 train_loader = data.DataLoader(
@@ -247,14 +262,14 @@ test_dataset = data.TensorDataset(tensor_x, tensor_y)
 test_loader = data.DataLoader(
     train_dataset,
     batch_size=batch_size,
-    shuffle=True)
+    shuffle=False)
 
 net = Net()
 optimizer = optim.Adam(net.parameters(), lr=lr)
 # We could use nn.CrossEntropyLoss() if all our y were in {0; 1}
 criterion = F.binary_cross_entropy
 print(net)
-total_step = len(train_loader)
+iteration_num = len(train_loader)
 loss_list = []
 acc_list = []
 for epoch in range(num_epochs):
@@ -278,5 +293,5 @@ for epoch in range(num_epochs):
         # acc_list.append(correct / total)
 
         if (i + 1) % 1 == 0:
-            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'
-                  .format(epoch + 1, num_epochs, i + 1, total_step, loss.item()))
+            print('Epoch [{}/{}], Iteration [{}/{}], Loss: {:.4f}'
+                  .format(epoch + 1, num_epochs, i + 1, iteration_num, loss.item()))
